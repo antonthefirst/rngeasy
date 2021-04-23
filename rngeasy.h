@@ -17,7 +17,7 @@ typedef int s32;
    Convention is Hamiltonian, component order xyzw.
 */
 struct quat {
-	float x,y,z,w;
+	float x, y, z, w;
 	quat() { }
 	quat(float _x, float _y, float _z, float _w) : x(_x), y(_y), z(_z), w(_w) { }
 };
@@ -198,18 +198,16 @@ float floatUnit(RNGSTATE_REF rng) {
 float floatEUnit(RNGSTATE_REF rng) {
 	return eunitFromBits(rngAdvance(rng));
 }
-/*
-#TODO write a GPU friendly version of this that's less clunky.
-The key is that the upper generated bits are unused, so we can use one of them to pick the sign (and the uppermost bit is generally regarded as the "best quality").
-float float_snit(RNGSTATE_REF rng) {
+/* #TODO make sure Snit and ESnit are actually unbiased down to the bit level. */
+float floatSnit(RNGSTATE_REF rng) {
 	u32 b = rngAdvance(rng);
-	return copysign(unit_from_bits(b), b & 0x8000000 ? +1.0f : -1.0f);
+	return unitFromBits(b) * sign((b & u32(0x8000000)) != u32(0) ? +1.0f : -1.0f);
 }
-float float_esnit(RNGSTATE_REF rng) {
+float floatESnit(RNGSTATE_REF rng) {
 	u32 b = rngAdvance(rng);
-	return copysign(eunit_from_bits(b), b & 0x8000000 ? +1.0f : -1.0f);
+	return eunitFromBits(b) * sign((b & u32(0x8000000)) != u32(0) ? +1.0f : -1.0f);
 }
-*/
+
 float floatIn(RNGSTATE_REF rng, float range_min, float range_max) {
 	return range_min + (range_max - range_min) * floatUnit(rng);
 }
@@ -278,6 +276,52 @@ INLINE bits32 rngAdvance(RNGSTATE_REF rng) {
 	rng.s0 = rotl(s0, 26) ^ s1 ^ (s1 << 9); // a, b
 	rng.s1 = rotl(s1, 13); // c
 	return result_starstar;
+}
+
+/*
+   Adapted into a stateless versionfrom:
+   https://blog.demofox.org/2013/07/06/fast-lightweight-random-shuffle-functionality-fixed/
+   https://github.com/Atrix256/RandomCode/blob/master/StoragelessShuffle/Source.cpp
+*/
+INLINE u32 shuffle(u32 idx, u32 count, u32 seed) {
+	/* Pre-calculate the masks needed for the Feistel network. */
+	/* If doing this for many indecies in a row, it would make sense to cache this. */
+	u32 next_pow_4 = u32(4);
+	while (count > next_pow_4)
+		next_pow_4 *= u32(4);
+	u32 num_bits = u32(0);
+	u32 mask = next_pow_4 - u32(1);
+	while (mask != u32(0)) {
+		mask = mask >> 1;
+		num_bits++;
+	}
+	u32 half_num_bits = num_bits / u32(2);
+	u32 right_mask = (u32(1) << half_num_bits) - u32(1);
+	u32 left_mask = right_mask << half_num_bits;
+
+	/* This will terminate as long as idx starts less than count. */
+	while (true)
+	{
+		/* Split the index. */
+		u32 left = (idx & left_mask) >> half_num_bits;
+		u32 right = (idx & right_mask);
+		/* Do 4 Feistel rounds. */
+		for (int index = 0; index < 4; ++index)
+		{
+			u32 newLeft = right;
+			u32 newRight = left ^ (splitmix32(right ^ seed) & right_mask);
+			left = newLeft;
+			right = newRight;
+		}
+		/* Re-assemble the bits into a shuffled index. */
+		idx = (left << half_num_bits) | right;
+
+		/* If it's in range, we are done. Otherwise keep trying (reject this result) */
+		if (idx < count)
+			return idx;
+	}
+	/* We should never get here. */
+	return u32(0);
 }
 
 #ifdef _WIN32
